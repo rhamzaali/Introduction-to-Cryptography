@@ -19,20 +19,28 @@ def bitsToBytes(bitStr):
             #s = 0
             i = 0
 
-    #s >> (8-i)
-    #yield s
+    if(len(bitStr)%8 !=0): # only for when the length isn't a mulitple of 8,
+                           # otherwise will repeat last byte again
+        s >> (8-i)
+        yield s
+
+def bytesToStr(mBytes):
+    s = ""
+    for i in mBytes:
+        s+=chr(i)
+    return s
 
 
-a = bytesToBits(strToBytes("hello"))
-
+a = bytesToBits(strToBytes("how much wood would a woodchuck chuck?"))
 b = list(a)
 
 c = bitsToBytes(b)
 d = list(c)
 
+print("Converting bytes to bits")
 print(b)
+print("Converting bits to bytes")
 print(d)
+print("Converting back to string input")
+print(bytesToStr(d))
 
-
-for i in d:
-    print(chr(i))

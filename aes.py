@@ -1,4 +1,7 @@
 import random
+from copy import copy
+
+
 nRow = 0
 
 def unpack_state(inp,num_blocks):
@@ -84,6 +87,11 @@ Rcon = [0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36,
             0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74,
             0xe8, 0xcb ]
 
+
+# for mix columns (matrix multiplication)
+fixedpoly = [[0x02,0x03,0x01,0x01],[0x01,0x02,0x03,0x01],[0x01,0x01,0x02,0x03],[0x03,0x01,0x01,0x02]]
+invfixedpoly = [[0x0e,0x0b,0x0d,0x09],[0x09,0x0e,0x0b,0x0d],[0x0d,0x09,0x0e,0x0b],[0x0b,0x0d,0x09,0x0e]]
+
 #Convert a string of bits (an int) into a stream of kbit blocks
 def bitstring_to_kbit_stream(n, num_words, k=8):
 
@@ -92,39 +100,19 @@ def bitstring_to_kbit_stream(n, num_words, k=8):
         yield n&mask
         n >>= k
 
-        
 #Convert a single int of num_blocks*4 bits into a Rijdael state    
 def create_state(inp,num_blocks):
     return [list(bitstring_to_kbit_stream(b,4,8))
         for b in bitstring_to_kbit_stream(inp,num_blocks,32)]
 
-
+#Convert a Rijndael state into a human readable string for debugging
 def state_to_str(state, num_blocks):
-    """
-    Convert a Rijndael state into a human readable
-    string for debugging
-    """
     s = ""
     for r in range(4):
         for c in range(num_blocks):
             s += "%02x "%state[r][c]
         s += "\n"
     return s
-
-def cipher(inV,out,w):
-    state = inV
-
-    addRoundKey(state,w) #replace w
-    for round in range(1,nRow-1):
-        subBytes(state)
-        shiftRows(state)
-        mixColumns(state)
-        addRoundKey(state,w) #replace w
-
-    subBytes(state)
-    shiftRows(state)
-    addRoundKey(state,w) #replace w
-    out = state
 
 
 
@@ -133,53 +121,327 @@ def subBytes(state,nBlocks,table):
         for r in range(4):
             state[r][c] = table[state[r][c]]
 
-def shiftRows(state):
-    i = -1  # skips first row
-    for row in state:
+def getRow(state,nBlocks,row):
+    return [state[c][row] for c in range(nBlocks)]
+
+
+def shiftRows(state,nRows,nBlocks):
+    length = len(state)*4
+    for i in range(1,nRows):
+        temp = getRow(state,nBlocks,i)
+        offset = i
+        index = offset%length # why the negation?
+        temp2 = temp[index:]+temp[:index]
+        state[0][i] = temp2[0] 
+        state[1][i] = temp2[1]
+        state[2][i] = temp2[2]
+        state[3][i] = temp2[3]
+        
+def invShiftRows(state,nRows,nBlocks):
+    length = len(state)*4
+    for i in range(1,nRows):
+        temp = getRow(state,nBlocks,i)
+        offset = i
+        index = offset%length # why the negation?
+        index = 4 - index
+        temp2 = temp[index:]+temp[:index]
+        state[0][i] = temp2[0] 
+        state[1][i] = temp2[1]
+        state[2][i] = temp2[2]
+        state[3][i] = temp2[3]
+
+
+def multGF256(p,q):     # p and q are elements of GF(2**8) m = x^8 + x^4 + x^3 + x + 1
+    m = 0x11b   # modulus for GF(2**8)
+    r = 0
+    while q:    # for all coefficients of q
+        if q&1: # add p if needed
+            r ^= p
+        #p = p*x (mod m)
+        p <<= 1
+        if p&0x100:
+            p^= m
+
+        #shift q
+        q >>= 1
+    return r
+
+
+def colMult(p,q):    # pass functions plus and mult 
+    rows_p = len(p)
+    cols_p = len(p[0])
+    rows_q = len(q)
+    cols_q = 1#len(q[0])
+
+    r = [[0 for row in range(cols_q)] for col in range(rows_p)]
+    for i in range(rows_p):
+        for j in range(cols_q):
+            for k in range(cols_p):
+                r[i][j] ^= multGF256(p[i][k],q[k][j])
+                #r[i][j] += (p[i][k] * q[k][j])
+    return r    
+
+def mixColumns(state):
+    i = 0
+    for col in state:
+        res = colMult(fixedpoly,[[col[0]],[col[1]],[col[2]],[col[3]]])
+        state[i] = [res[0][0],res[1][0],res[2][0],res[3][0]]
         i+=1
-        for j in range(i):
-            row.append(row.pop(0)) # pop and append to last
 
 
-def shiftRows_inv(state,nRows):
-    k = nRows # loop in rev
-    for row in state:
-        for j in range(k):
-            row.append(row.pop(0))
-        k-=1 # skips first row
+def invMixColumns(state):
+    i = 0
+    for col in state:
+        res = colMult(invfixedpoly,[[col[0]],[col[1]],[col[2]],[col[3]]])
+        state[i] = [res[0][0],res[1][0],res[2][0],res[3][0]]
+        i+=1
 
-num_blocks = 4
-x= random.randint(0,(1<<128)-1)
-state = unpack_state(x,4)
-
-#subBytes(state,4,sbox)
-#subBytes(state,4,rsbox)
-#res = pack_state(state,num_blocks)
-#print(x,'\n',res,sep="")
-
-print(state)
-shiftRows(state)
-print(state)
-shiftRows_inv(state,4)
-print(state)
-
-
-
-
-
-
-
+def keyExpansion(key):
+    i = 0
+    Nb = 4
+    Nr = 10 # number of rounds for 128 bit
+    Nk = 4
+    w = [0] * (Nb * (Nr+1))
+    while i < Nk:
+        w[i] = bytesToWord([key[4*i],key[4*i+1],key[4*i+2],key[4*i+3]])
+        i = i + 1
+    i = Nk
+    while i < (Nb * (Nr+1)):
+        temp = w[i-1]
+        if (i%Nk == 0):
+            temp = subWord(rotWord(temp,1)) ^ bytesToWord([Rcon[int(i/Nk)],0x00,0x00,0x00])
+        elif (Nk > 6 & i%Nk == 4):
+            temp = subWord(temp)
+        w[i] =   w[i-Nk] ^ temp
+        i += 1
+    return w
 
 
+def bytesToWord(arrBytes):
+    arrBytes = arrBytes[::-1]
+    i = 3
+    word = 0x0
+    while i >= 0:
+        word |= arrBytes[i] << 8*i
+        i-=1
+    return word
+
+def wordToBytes(word):
+    i = 0
+    arrBytes = [0]*4
+    while i < 4:
+        arrBytes[i] = word & 0xFF
+        word >>= 8
+        i+=1
+    return arrBytes[::-1]
+    
+
+def subWord(word):
+    arr = wordToBytes(word)
+    for i in range(len(arr)):
+        arr[i] = sbox[arr[i]]
+    word = bytesToWord(arr)
+    return word
+        
+def rotWord(word, n):
+    arr = wordToBytes(word)
+    word =  bytesToWord(arr[n:]+arr[0:n])
+    return word
+
+def showHex(arr): #for debugging
+    for i in range(4):
+        for j in range(4):
+            print(hex(arr[i][j])," ",end="")
+        print("")
+    print("")
+        
+
+def boxifyKey(key):
+    a = [key[0],key[1],key[2],key[3]]
+    b = [key[4],key[5],key[6],key[7]]
+    c = [key[8],key[9],key[10],key[11]]
+    d = [key[12],key[13],key[14],key[15]]
+    boxKey = [a,b,c,d]
+    return boxKey
 
 
+def addRoundKey(state,w):
+    for i in range(4):
+        for j in range(4):
+            state[i][j] = state[i][j] ^ w[i][j]
 
 
+def cipher(state,boxKey):
+    addRoundKey(state,boxKey) #for first run, round key value is the original key itself
+    for i in range(9): # number of rounds -1 because first round done above
+        subBytes(state,4,sbox)#
+        shiftRows(state,4,4)#
+        mixColumns(state)#
+        addRoundKey(state,unpackWord(boxifyWord(w[i*4+0],w[i*4+1],w[i*4+2],w[i*4+3])))
+    subBytes(state,4,sbox)#
+    shiftRows(state,4,4)#
+    addRoundKey(state,unpackWord(boxifyWord(w[36],w[37],w[38],w[39]))) # last 4 round word keys
+
+# debug version
+##def cipher(state,boxKey):
+##    print("round[0].input   ",end="")
+##    oneliner(state)
+##    addRoundKey(state,boxKey) #for first run, round key value is the original key itself
+##    print("round[0].k_sch   ",end="") # round key schedule value
+##    oneliner(boxKey)
+##    for i in range(9): # number of rounds -1 because first round done above
+##        print("round[",(i+1),"].start   ",sep="",end="")
+##        oneliner(state)
+##        subBytes(state,4,sbox)#
+##        print("round[",(i+1),"].s_box   ",sep="",end="")
+##        oneliner(state)
+##        shiftRows(state,4,4)#
+##        print("round[",(i+1),"].s_row   ",sep="",end="")
+##        oneliner(state)
+##        mixColumns(state)#
+##        print("round[",(i+1),"].m_col   ",sep="",end="")
+##        oneliner(state)
+##        print("round[",(i+1),"].k_sch   ",sep="",end="")
+##        oneliner(unpackWord(boxifyWord(w[i*4+0],w[i*4+1],w[i*4+2],w[i*4+3])))
+##        addRoundKey(state,unpackWord(boxifyWord(w[i*4+0],w[i*4+1],w[i*4+2],w[i*4+3])))
+##    print("round[10].start   ",sep="",end="")
+##    oneliner(state)
+##    subBytes(state,4,sbox)#
+##    print("round[10].s_box   ",sep="",end="")
+##    oneliner(state)
+##    shiftRows(state,4,4)#
+##    print("round[10].s_row   ",sep="",end="")
+##    oneliner(state)
+##    print("round[10].k_sch   ",sep="",end="")
+##    oneliner(unpackWord(boxifyWord(w[36],w[37],w[38],w[39])))           
+##    addRoundKey(state,unpackWord(boxifyWord(w[36],w[37],w[38],w[39])))#
+##    print("round[10].output   ",sep="",end="")
+##    oneliner(state)
+
+def invCipher(state,boxKey):
+    addRoundKey(state,unpackWord(boxifyWord(w[36],w[37],w[38],w[39]))) # assuming key goes here again
+    k = 0
+    for i in range(8,-1,-1): # go in reverse
+        invShiftRows(state,4,4)
+        subBytes(state,4,rsbox)
+        addRoundKey(state,unpackWord(boxifyWord(w[i*4+0],w[i*4+1],w[i*4+2],w[i*4+3])))
+        invMixColumns(state)
+        k+=1
+    invShiftRows(state,4,4)
+    subBytes(state,4,rsbox)
+    addRoundKey(state,boxKey) # first four
+    
+
+# debug version of the inverse cipher
+##def invCipher(state,boxKey):
+##    print("round[0].iinput   ",end="")
+##    oneliner(state)
+##    print("round[0].ik_sch   ",end="") # round key schedule value
+##    oneliner(unpackWord(boxifyWord(w[36],w[37],w[38],w[39])))
+##    addRoundKey(state,unpackWord(boxifyWord(w[36],w[37],w[38],w[39]))) # assuming key goes here again
+##    k = 0
+##    for i in range(8,-1,-1): # go in reverse
+##        print("round[",(k+1),"].istart   ",sep="",end="")
+##        oneliner(state)
+##        invShiftRows(state,4,4)
+##        print("round[",(k+1),"].is_row   ",sep="",end="")
+##        oneliner(state)
+##        subBytes(state,4,rsbox)
+##        print("round[",(k+1),"].is_box   ",sep="",end="")
+##        oneliner(state)
+##        print("round[",(k+1),"].is_sch   ",sep="",end="")
+##        oneliner(unpackWord(boxifyWord(w[i*4+0],w[i*4+1],w[i*4+2],w[i*4+3])))
+##        addRoundKey(state,unpackWord(boxifyWord(w[i*4+0],w[i*4+1],w[i*4+2],w[i*4+3])))
+##        print("round[",(k+1),"].ik_add   ",sep="",end="")
+##        oneliner(state)
+##        invMixColumns(state)
+##        k+=1
+##    print("round[10].istart   ",sep="",end="")
+##    oneliner(state)
+##    invShiftRows(state,4,4)
+##    print("round[10].is_row   ",sep="",end="")
+##    oneliner(state)
+##    subBytes(state,4,rsbox)
+##    print("round[10].is_box   ",sep="",end="")
+##    oneliner(state)
+##    print("round[10].is_sch   ",sep="",end="")
+##    oneliner(boxKey)
+##    addRoundKey(state,boxKey) # first four
+##    print("round[10].ioutput   ",sep="",end="")
+##    oneliner(state)
+
+    
+def boxifyWord(w1,w2,w3,w4):    # convert 4 lists into 2d array
+    return [[w1],[w2],[w3],[w4]]
+
+def unpackWord(w):
+    a = wordToBytes(w[0][0])
+    b = wordToBytes(w[1][0])
+    c = wordToBytes(w[2][0])
+    d = wordToBytes(w[3][0])
+    return ([a,b,c,d])
 
 
+def bytesToWord32(arrBytes): # bytes to word 32 bit version
+    arrBytes = arrBytes[::-1]
+    i = 3
+    word = 0x0
+    while i >= 0:
+        word |= arrBytes[i] << 32*i
+        i-=1
+    return word
+
+def oneliner(state): # generate 32 bit hex value for debugging
+    a = bytesToWord([state[0][0],state[0][1],state[0][2],state[0][3]])
+    b = bytesToWord([state[1][0],state[1][1],state[1][2],state[1][3]])
+    c = bytesToWord([state[2][0],state[2][1],state[2][2],state[2][3]])
+    d = bytesToWord([state[3][0],state[3][1],state[3][2],state[3][3]])
+    print(hex(bytesToWord32([a,b,c,d])))
+
+def getBlock(raw):  # convert raw string to 16 bit block
+    if len(raw) == 0:
+        return ""
+    # container for list of bytes
+    block = []
+    for c in list(raw):
+        block.append(ord(c))
+    # if the block is less than 16 bytes, pad the block
+    # with the string representing the number of missing bytes
+    if len(block) < 16:
+        padChar = 16-len(block)
+        while len(block) < 16:
+            block.append(padChar)
+    a = block[:4]
+    b = block[4:8]
+    c = block[8:12]
+    d = block[12:]
+    block = [a,b,c,d]
+    return block
+
+def getString(block):
+    a = [item for sublist in block for item in sublist]
+    a = [0 if x in range(1,31) else x for x in a]
+    a = [chr(item) for item in a]
+    b = ''.join(a)
+    b = b.replace("\00", "")
+    print(b)
+    
 
 
+key = [0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f]
+w = keyExpansion(key)
+w = w[4:] # first four are original key values so slice off
+boxKey = boxifyKey(key) # convert key to 2d array
 
-
-
+print("A 128-bit encryption")
+print("Encrypting string = 'Hello World':")
+a = getBlock("Hello World")
+state = a
+cipher(state,boxKey)
+print("Encrypted text:")
+getString(state)
+invCipher(state,boxKey)
+print("Decrypting text..")
+print("decryption result string:")
+getString(state)
 
